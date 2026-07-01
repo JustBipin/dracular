@@ -243,6 +243,8 @@ protected Q_SLOTS:
     void slotShowBottomBar();
     void slotShowPresentation();
     void slotHidePresentation();
+    void slotToggleDarkReader();
+    void slotUpdateDarkReaderAction();
 
     /**
      * Updates the menu that is by default at the right end of the toolbar.
@@ -439,6 +441,7 @@ private:
     KToggleAction *m_showMenuBarAction;
     KToggleAction *m_showLeftPanel;
     KToggleAction *m_showBottomBar;
+    KToggleAction *m_darkReaderAction;
     QAction *m_showSignaturePanel;
     KToggleFullScreenAction *m_showFullScreenAction;
     QAction *m_aboutBackend;
