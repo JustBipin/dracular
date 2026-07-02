@@ -71,10 +71,11 @@ static int maskExportedFlags(int flags)
 }
 
 // BEGIN PopplerAnnotationProxy implementation
-PopplerAnnotationProxy::PopplerAnnotationProxy(Poppler::Document *doc, QMutex *userMutex, QHash<Okular::Annotation *, Poppler::Annotation *> *annotsOnOpenHash)
+PopplerAnnotationProxy::PopplerAnnotationProxy(Poppler::Document *doc, QMutex *userMutex, QHash<Okular::Annotation *, Poppler::Annotation *> *annotsOnOpenHash, QSet<int> *pagesWithUnsavedAnnotations)
     : ppl_doc(doc)
     , mutex(userMutex)
     , annotationsOnOpenHash(annotsOnOpenHash)
+    , m_pagesWithUnsavedAnnotations(pagesWithUnsavedAnnotations)
 {
 }
 
@@ -641,6 +642,10 @@ void PopplerAnnotationProxy::notifyAddition(Okular::Annotation *okl_ann, int pag
 {
     QMutexLocker ml(mutex);
 
+    if (m_pagesWithUnsavedAnnotations) {
+        m_pagesWithUnsavedAnnotations->insert(page);
+    }
+
     std::unique_ptr<Poppler::Page> ppl_page = ppl_doc->page(page);
 
     // Create poppler annotation
@@ -713,7 +718,6 @@ void PopplerAnnotationProxy::notifyAddition(Okular::Annotation *okl_ann, int pag
 
 void PopplerAnnotationProxy::notifyModification(const Okular::Annotation *okl_ann, int page, bool appearanceChanged)
 {
-    Q_UNUSED(page);
     Q_UNUSED(appearanceChanged);
 
     Poppler::Annotation *ppl_ann = qvariant_cast<Poppler::Annotation *>(okl_ann->nativeId());
@@ -723,6 +727,10 @@ void PopplerAnnotationProxy::notifyModification(const Okular::Annotation *okl_an
     }
 
     QMutexLocker ml(mutex);
+
+    if (m_pagesWithUnsavedAnnotations) {
+        m_pagesWithUnsavedAnnotations->insert(page);
+    }
 
     if (okl_ann->flags() & (Okular::Annotation::BeingMoved | Okular::Annotation::BeingResized)) {
         // Okular ui already renders the annotation on its own
@@ -819,6 +827,10 @@ void PopplerAnnotationProxy::notifyRemoval(Okular::Annotation *okl_ann, int page
     }
 
     QMutexLocker ml(mutex);
+
+    if (m_pagesWithUnsavedAnnotations) {
+        m_pagesWithUnsavedAnnotations->insert(page);
+    }
 
     std::unique_ptr<Poppler::Page> ppl_page = ppl_doc->page(page);
     annotationsOnOpenHash->remove(okl_ann);
