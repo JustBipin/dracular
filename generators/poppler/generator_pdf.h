@@ -176,21 +176,10 @@ private:
 
 #if HAVE_POPPLER_CORE_OUTPUTDEV
     // BEGIN Dark Reader exact image mask
-    // Renders a page via a custom Poppler core OutputDev that additionally
-    // records exactly which pixels belong to embedded raster images, so
-    // that PagePainter's Dark Reader recoloring can leave them untouched.
-    // Only attempted for PDFs opened from a local file path, with no
-    // password (see darkreaderoutputdev.h for why). Returns false if the
-    // mask-aware render could not be produced for any reason; callers must
-    // fall back to the normal renderToImage() path in that case.
-    bool renderWithDarkReaderMask(Okular::PixmapRequest *request, double dpiX, double dpiY, QImage *outImage);
 
     // Makes sure m_darkReaderMaskCache has a valid mask for @p page at the
-    // given resolution, generating one via DarkReaderRenderer if needed —
-    // regardless of whether the pixmap request that triggered this call is
-    // itself eligible to reuse the accompanying bitmap (tile/partial requests
-    // are not, but should still be able to prime the mask cache). No-op if a
-    // matching mask is already cached.
+    // given resolution, generating one via DarkReaderRenderer if needed.
+    // No-op if a matching mask is already cached.
     void ensureDarkReaderMask(const Okular::Page *page, double dpiX, double dpiY);
 
     // Secondary, independent PDFDoc used only to drive Dark Reader's
@@ -201,13 +190,12 @@ private:
     // unavailable).
     std::unique_ptr<DarkReaderRenderer> m_darkReaderRenderer;
 
-    // Most recently generated "exclude from recoloring" mask per page
-    // number, in the same (unrotated) orientation as the page bitmap. Reset
-    // whenever the document is closed. Deliberately not resized/rotated
-    // proactively: PagePainter adapts it to the current view geometry when
-    // it is consumed, the same way it already adapts the cached pixmap.
+    // Cached "exclude from recoloring" masks per page.
+    // The mask72 is the base mask rendered at a fixed 72 DPI, which is very fast
+    // and only done once. scaledMask is dynamically scaled to dpiX/dpiY.
     struct DarkReaderMaskEntry {
-        QImage mask;
+        QImage mask72;
+        QImage scaledMask;
         double dpiX = 0;
         double dpiY = 0;
     };

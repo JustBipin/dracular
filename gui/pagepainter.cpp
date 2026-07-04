@@ -18,6 +18,7 @@
 #include <QVarLengthArray>
 
 // system includes
+#include <algorithm>
 #include <math.h>
 #include <memory>
 
@@ -795,42 +796,42 @@ void PagePainter::recolor(QImage *image, const QColor &foreground, const QColor 
     const int foreground_green = foreground.green();
     const int foreground_blue = foreground.blue();
 
+    QRgb lut[256];
+    for (int l = 0; l < 256; ++l) {
+        const int r = std::clamp(static_cast<int>(scaleRed * l + foreground_red), 0, 255);
+        const int g = std::clamp(static_cast<int>(scaleGreen * l + foreground_green), 0, 255);
+        const int b = std::clamp(static_cast<int>(scaleBlue * l + foreground_blue), 0, 255);
+        lut[l] = qRgb(r, g, b);
+    }
+
     QRgb *data = reinterpret_cast<QRgb *>(image->bits());
     const int pixels = image->width() * image->height();
 
     const bool isDarkMode = qGray(background.rgb()) < qGray(foreground.rgb());
 
     for (int i = 0; i < pixels; ++i) {
-        const uchar r_orig = qRed(data[i]);
-        const uchar g_orig = qGreen(data[i]);
-        const uchar b_orig = qBlue(data[i]);
+        const QRgb pixel = data[i];
+        const uchar r_orig = qRed(pixel);
+        const uchar g_orig = qGreen(pixel);
+        const uchar b_orig = qBlue(pixel);
 
         const int max_val = qMax(r_orig, qMax(g_orig, b_orig));
         const int min_val = qMin(r_orig, qMin(g_orig, b_orig));
 
         if (max_val - min_val > 20) {
             // Colored pixel (e.g. highlight, underline, links)
-            const unsigned a = qAlpha(data[i]);
             if (isDarkMode) {
                 uchar R = r_orig;
                 uchar G = g_orig;
                 uchar B = b_orig;
                 invertLumaPixel(R, G, B, 0.2126, 0.7152, 0.0722); // sRGB luma coefficients
-                data[i] = qRgba(R, G, B, a);
-            } else {
-                // Keep original color in light modes
-                data[i] = qRgba(r_orig, g_orig, b_orig, a);
+                data[i] = qRgba(R, G, B, qAlpha(pixel));
             }
+            // (In light modes, we keep the original color, so do nothing)
         } else {
             // Neutral pixel (text, background, grayscale)
-            const int lightness = qGray(data[i]);
-
-            const float r = scaleRed * lightness + foreground_red;
-            const float g = scaleGreen * lightness + foreground_green;
-            const float b = scaleBlue * lightness + foreground_blue;
-
-            const unsigned a = qAlpha(data[i]);
-            data[i] = qRgba(r, g, b, a);
+            const int lightness = qGray(pixel);
+            data[i] = (lut[lightness] & 0x00ffffff) | (pixel & 0xff000000);
         }
     }
 }
@@ -850,31 +851,62 @@ void PagePainter::recolorExcludingMask(QImage *image, const QColor &foreground, 
     Q_ASSERT(image->format() == QImage::Format_ARGB32_Premultiplied);
 
     if (noRecolorMask.size() != image->size()) {
-        // Geometry mismatch: whoever produced the mask did not adapt it to
-        // match this image (see fetchNoRecolorMask()). Rather than recolor
-        // the wrong pixels, fall back to plain recolor() for this frame.
         qCWarning(OkularUiDebug) << "noRecolorMask size does not match image size, ignoring it";
         recolor(image, foreground, background);
         return;
     }
 
-    // Keep a copy of the original (pre-recolor) pixels so they can be
-    // restored under the mask below. QImage's implicit sharing makes this
-    // cheap: no actual pixel data is copied unless/until 'image' is modified.
-    const QImage original = *image;
+    const float scaleRed = background.redF() - foreground.redF();
+    const float scaleGreen = background.greenF() - foreground.greenF();
+    const float scaleBlue = background.blueF() - foreground.blueF();
 
-    recolor(image, foreground, background);
+    const int foreground_red = foreground.red();
+    const int foreground_green = foreground.green();
+    const int foreground_blue = foreground.blue();
+
+    QRgb lut[256];
+    for (int l = 0; l < 256; ++l) {
+        const int r = std::clamp(static_cast<int>(scaleRed * l + foreground_red), 0, 255);
+        const int g = std::clamp(static_cast<int>(scaleGreen * l + foreground_green), 0, 255);
+        const int b = std::clamp(static_cast<int>(scaleBlue * l + foreground_blue), 0, 255);
+        lut[l] = qRgb(r, g, b);
+    }
 
     const QImage mask = noRecolorMask.format() == QImage::Format_Grayscale8 ? noRecolorMask : noRecolorMask.convertToFormat(QImage::Format_Grayscale8);
 
     QRgb *data = reinterpret_cast<QRgb *>(image->bits());
-    const QRgb *originalData = reinterpret_cast<const QRgb *>(original.constBits());
+    const bool isDarkMode = qGray(background.rgb()) < qGray(foreground.rgb());
 
     for (int y = 0, i = 0; y < image->height(); ++y) {
         const uchar *maskRow = mask.constScanLine(y);
         for (int x = 0; x < image->width(); ++x, ++i) {
             if (maskRow[x] >= 128) {
-                data[i] = originalData[i];
+                // Exclude from recoloring
+                continue;
+            }
+
+            const QRgb pixel = data[i];
+            const uchar r_orig = qRed(pixel);
+            const uchar g_orig = qGreen(pixel);
+            const uchar b_orig = qBlue(pixel);
+
+            const int max_val = qMax(r_orig, qMax(g_orig, b_orig));
+            const int min_val = qMin(r_orig, qMin(g_orig, b_orig));
+
+            if (max_val - min_val > 20) {
+                // Colored pixel (e.g. highlight, underline, links)
+                if (isDarkMode) {
+                    uchar R = r_orig;
+                    uchar G = g_orig;
+                    uchar B = b_orig;
+                    invertLumaPixel(R, G, B, 0.2126, 0.7152, 0.0722); // sRGB luma coefficients
+                    data[i] = qRgba(R, G, B, qAlpha(pixel));
+                }
+                // (In light modes, we keep the original color, so do nothing)
+            } else {
+                // Neutral pixel (text, background, grayscale)
+                const int lightness = qGray(pixel);
+                data[i] = (lut[lightness] & 0x00ffffff) | (pixel & 0xff000000);
             }
         }
     }

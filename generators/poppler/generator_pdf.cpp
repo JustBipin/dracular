@@ -1342,7 +1342,6 @@ QImage PDFGenerator::image(Okular::PixmapRequest *request)
     // 2. Take data from outputdev and attach it to the Page
     QImage img;
     if (p) {
-        bool renderedWithDarkReaderMask = false;
 #if HAVE_POPPLER_CORE_OUTPUTDEV
         // Dark Reader wants an exact "this pixel belongs to an embedded
         // image" mask, so it can recolor everything else without touching
@@ -1355,28 +1354,25 @@ QImage PDFGenerator::image(Okular::PixmapRequest *request)
         // where images are incorrectly inverted on the first page paint until a zoom action occurs.
         if (Okular::SettingsCore::changeColors() && Okular::SettingsCore::renderMode() == Okular::SettingsCore::EnumRenderMode::DarkReader) {
             ensureDarkReaderMask(page, fakeDpiX, fakeDpiY);
-            renderedWithDarkReaderMask = renderWithDarkReaderMask(request, fakeDpiX, fakeDpiY, &img);
         }
 #endif
-        if (!renderedWithDarkReaderMask) {
-            if (request->isTile()) {
-                const QRect rect = request->normalizedRect().geometry(request->width(), request->height());
-                if (request->partialUpdatesWanted()) {
-                    RenderImagePayload payload(this, request);
-                    img = p->renderToImage(
-                        fakeDpiX, fakeDpiY, rect.x(), rect.y(), rect.width(), rect.height(), Poppler::Page::Rotate0, partialUpdateCallback, shouldDoPartialUpdateCallback, shouldAbortRenderCallback, QVariant::fromValue(&payload));
-                } else {
-                    RenderImagePayload payload(this, request);
-                    img = p->renderToImage(fakeDpiX, fakeDpiY, rect.x(), rect.y(), rect.width(), rect.height(), Poppler::Page::Rotate0, nullptr, nullptr, shouldAbortRenderCallback, QVariant::fromValue(&payload));
-                }
+        if (request->isTile()) {
+            const QRect rect = request->normalizedRect().geometry(request->width(), request->height());
+            if (request->partialUpdatesWanted()) {
+                RenderImagePayload payload(this, request);
+                img = p->renderToImage(
+                    fakeDpiX, fakeDpiY, rect.x(), rect.y(), rect.width(), rect.height(), Poppler::Page::Rotate0, partialUpdateCallback, shouldDoPartialUpdateCallback, shouldAbortRenderCallback, QVariant::fromValue(&payload));
             } else {
-                if (request->partialUpdatesWanted()) {
-                    RenderImagePayload payload(this, request);
-                    img = p->renderToImage(fakeDpiX, fakeDpiY, -1, -1, -1, -1, Poppler::Page::Rotate0, partialUpdateCallback, shouldDoPartialUpdateCallback, shouldAbortRenderCallback, QVariant::fromValue(&payload));
-                } else {
-                    RenderImagePayload payload(this, request);
-                    img = p->renderToImage(fakeDpiX, fakeDpiY, -1, -1, -1, -1, Poppler::Page::Rotate0, nullptr, nullptr, shouldAbortRenderCallback, QVariant::fromValue(&payload));
-                }
+                RenderImagePayload payload(this, request);
+                img = p->renderToImage(fakeDpiX, fakeDpiY, rect.x(), rect.y(), rect.width(), rect.height(), Poppler::Page::Rotate0, nullptr, nullptr, shouldAbortRenderCallback, QVariant::fromValue(&payload));
+            }
+        } else {
+            if (request->partialUpdatesWanted()) {
+                RenderImagePayload payload(this, request);
+                img = p->renderToImage(fakeDpiX, fakeDpiY, -1, -1, -1, -1, Poppler::Page::Rotate0, partialUpdateCallback, shouldDoPartialUpdateCallback, shouldAbortRenderCallback, QVariant::fromValue(&payload));
+            } else {
+                RenderImagePayload payload(this, request);
+                img = p->renderToImage(fakeDpiX, fakeDpiY, -1, -1, -1, -1, Poppler::Page::Rotate0, nullptr, nullptr, shouldAbortRenderCallback, QVariant::fromValue(&payload));
             }
         }
     } else {
@@ -1404,74 +1400,43 @@ QImage PDFGenerator::image(Okular::PixmapRequest *request)
 void PDFGenerator::ensureDarkReaderMask(const Okular::Page *page, double dpiX, double dpiY)
 {
     const int pageNum = page->number();
-    const auto it = m_darkReaderMaskCache.constFind(pageNum);
-    if (it != m_darkReaderMaskCache.constEnd() && it.value().dpiX == dpiX && it.value().dpiY == dpiY) {
-        return;
+    auto it = m_darkReaderMaskCache.find(pageNum);
+
+    if (it == m_darkReaderMaskCache.end()) {
+        if (documentHasPassword || documentFilePath.isEmpty()) {
+            return;
+        }
+
+        if (!m_darkReaderRenderer) {
+            m_darkReaderRenderer = DarkReaderRenderer::create(documentFilePath);
+        }
+        if (!m_darkReaderRenderer) {
+            return;
+        }
+
+        QImage img;
+        QImage mask72;
+        // Generate base mask at a fixed 72 DPI (native PDF point resolution) - fast and lightweight (~5ms)
+        if (!m_darkReaderRenderer->render(pageNum, 72.0, 72.0, &img, &mask72)) {
+            m_darkReaderRenderer.reset();
+            m_darkReaderMaskCache.remove(pageNum);
+            return;
+        }
+
+        DarkReaderMaskEntry entry;
+        entry.mask72 = mask72;
+        entry.dpiX = 0;
+        entry.dpiY = 0;
+        it = m_darkReaderMaskCache.insert(pageNum, entry);
     }
 
-    if (documentHasPassword || documentFilePath.isEmpty()) {
-        return;
+    // Scale cached base mask on-the-fly to requested DPI (practically instant compared to rendering)
+    if (it.value().dpiX != dpiX || it.value().dpiY != dpiY) {
+        QSize targetSize(qRound(it.value().mask72.width() * dpiX / 72.0), qRound(it.value().mask72.height() * dpiY / 72.0));
+        it.value().scaledMask = it.value().mask72.scaled(targetSize);
+        it.value().dpiX = dpiX;
+        it.value().dpiY = dpiY;
     }
-
-    if (!m_darkReaderRenderer) {
-        m_darkReaderRenderer = DarkReaderRenderer::create(documentFilePath);
-    }
-    if (!m_darkReaderRenderer) {
-        return;
-    }
-
-    QImage img;
-    QImage mask;
-    if (!m_darkReaderRenderer->render(pageNum, dpiX, dpiY, &img, &mask)) {
-        m_darkReaderRenderer.reset();
-        m_darkReaderMaskCache.remove(pageNum);
-        return;
-    }
-
-    DarkReaderMaskEntry entry;
-    entry.mask = mask;
-    entry.dpiX = dpiX;
-    entry.dpiY = dpiY;
-    m_darkReaderMaskCache[pageNum] = entry;
-}
-
-bool PDFGenerator::renderWithDarkReaderMask(Okular::PixmapRequest *request, double dpiX, double dpiY, QImage *outImage)
-{
-    ensureDarkReaderMask(request->page(), dpiX, dpiY);
-
-    if (request->isTile() || request->partialUpdatesWanted()) {
-        return false;
-    }
-
-    if (documentHasPassword || documentFilePath.isEmpty()) {
-        return false;
-    }
-
-    if (m_pagesWithUnsavedAnnotations.contains(request->page()->number())) {
-        return false;
-    }
-
-    if (!m_darkReaderRenderer) {
-        m_darkReaderRenderer = DarkReaderRenderer::create(documentFilePath);
-    }
-    if (!m_darkReaderRenderer) {
-        return false;
-    }
-
-    QImage mask;
-    if (!m_darkReaderRenderer->render(request->page()->number(), dpiX, dpiY, outImage, &mask)) {
-        m_darkReaderRenderer.reset();
-        m_darkReaderMaskCache.remove(request->page()->number());
-        return false;
-    }
-
-    DarkReaderMaskEntry entry;
-    entry.mask = mask;
-    entry.dpiX = dpiX;
-    entry.dpiY = dpiY;
-    m_darkReaderMaskCache[request->page()->number()] = entry;
-
-    return true;
 }
 #endif
 
@@ -1862,7 +1827,7 @@ QVariant PDFGenerator::metaData(const QString &key, const QVariant &option) cons
         // in which case callers must fall back to recoloring the whole page.
         const auto it = m_darkReaderMaskCache.constFind(option.toInt());
         if (it != m_darkReaderMaskCache.constEnd()) {
-            return QVariant::fromValue(it.value().mask);
+            return QVariant::fromValue(it.value().scaledMask);
         }
 #endif
     }
