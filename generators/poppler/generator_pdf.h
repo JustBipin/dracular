@@ -201,6 +201,11 @@ private:
     };
     QHash<int, DarkReaderMaskEntry> m_darkReaderMaskCache;
     QSet<int> m_pagesWithUnsavedAnnotations;
+    // Tracks whether Dark Reader recolor was active at the last reparseConfig().
+    // Used to detect mid-session toggles: enabling Dark Reader primes no mask
+    // and paint alone can never warm it (only image() primes), so a toggle
+    // must invalidate pixmaps to force re-requests (which prime the mask).
+    bool m_darkReaderActive = false;
     // END Dark Reader exact image mask
 #endif
 };

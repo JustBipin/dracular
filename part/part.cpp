@@ -2067,6 +2067,16 @@ void Part::slotToggleDarkReader()
     }
     Okular::SettingsCore::setChangeColors(enabled);
     Okular::SettingsCore::self()->save();
+    // Toggling Dark Reader primes no image mask (only image() does via
+    // ensureDarkReaderMask), so a bare repaint would fall back to full-page
+    // recolor until the next zoom. Route through reparseConfig(): the PDF
+    // generator detects the Dark Reader transition and reports a change, and
+    // Document then evicts cached pixmaps + notifies observers, forcing
+    // re-requests of the visible pages which prime the masks. No-op for
+    // non-PDF generators (their reparseConfig is untouched).
+    if (m_document) {
+        m_document->reparseConfig();
+    }
 }
 
 void Part::slotUpdateDarkReaderAction()

@@ -804,6 +804,12 @@ Okular::Document::OpenResult PDFGenerator::init(QList<Okular::Page *> &pagesVect
 
     loadPages(pagesVector, 0, false);
 
+    // Sync Dark Reader state before the initial reparseConfig() so opening a
+    // document while Dark Reader is already active is not misdetected as a
+    // mid-session toggle (fresh-open primes masks synchronously in image()).
+#if HAVE_POPPLER_CORE_OUTPUTDEV
+    m_darkReaderActive = Okular::SettingsCore::changeColors() && Okular::SettingsCore::renderMode() == Okular::SettingsCore::EnumRenderMode::DarkReader;
+#endif
     // update the configuration
     reparseConfig();
 
@@ -1854,6 +1860,21 @@ bool PDFGenerator::reparseConfig()
     }
     bool aaChanged = setDocumentRenderHints();
     somethingchanged = somethingchanged || aaChanged;
+#if HAVE_POPPLER_CORE_OUTPUTDEV
+    // Dark Reader needs pixmap re-requests, not just a repaint: cached page
+    // pixmaps are raw renders and paint alone never primes the image mask
+    // (only image() via ensureDarkReaderMask does). Without invalidation a
+    // mid-session toggle repaints through the null-mask full-recolor fallback
+    // until the next zoom/scroll issues image() requests. Detect the toggle
+    // here so Document::reparseConfig() evicts pixmaps and observers
+    // re-request visible pages (which prime the masks). Gated to Dark Reader
+    // transitions only; other render modes recolor per-paint from raw pixmaps.
+    const bool darkReaderActive = Okular::SettingsCore::changeColors() && Okular::SettingsCore::renderMode() == Okular::SettingsCore::EnumRenderMode::DarkReader;
+    if (darkReaderActive != m_darkReaderActive) {
+        m_darkReaderActive = darkReaderActive;
+        somethingchanged = true;
+    }
+#endif
     return somethingchanged;
 }
 
