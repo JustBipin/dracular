@@ -1,92 +1,106 @@
-# Okular – Universal Document Viewer
-# Experimental Feature: Dark reader [Demo](https://youtu.be/Xf0qtwL_RVU)
-## Features: 
-1. Inverts text without inverting images
-2. provides a shortcut to toggle dark reader
-3. option to choose dark reader background from default(breeze background), color scheme or Custom
-4. text's luminosity is changed so they preserve colors ( unlike color mode: change light and dark color
+# Dracular
 
+**Dracular** is an independent fork of [Okular](https://okular.kde.org), KDE's universal document viewer, with a dark mode built for reading: **text and backgrounds turn dark, images stay exactly as they are.**
 
-Okular can view and annotate documents of various formats, including PDF, Postscript, Comic Book, and various image formats.
-It supports native PDF annotations.
+Okular's built-in "Change Colors" options invert the whole page, so photos, figures and scans end up as negatives. Dracular's *Dark Reader* mode recolors only the text and page background and leaves embedded images untouched.
 
-### Downloads
+[Demo video](https://youtu.be/Xf0qtwL_RVU)
 
-For download and installation instructions, see https://okular.kde.org/download.php
+## Features
 
-### User manual
+- **Dark Reader mode** for **PDF** and **EPUB** documents.
+- **Images are preserved.** Embedded raster images are excluded from recoloring using an exact per-pixel mask recorded while the page is rendered, not a color heuristic, so grayscale photos and muted scans are not mistaken for text.
+- **Colors keep their identity.** Black-and-white content is mapped to the text and background colors, while colored content (colored text, links, highlights) has its brightness inverted but its hue kept, so green stays green and remains readable on a dark background.
+- **Choice of background:** the default dark gray (`#232627`), the current KDE color scheme's window color, or any custom color.
+- **One-click toggle** from the menu bar, independent of Okular's existing color-mode menu. Both stay in sync.
+- Everything else Okular does: annotations, forms, signatures, search, bookmarks, and the many other formats Okular supports.
 
-https://docs.kde.org/?application=okular&branch=stable5
+### Using Dark Reader
 
-### Bugs
+- Toggle it with the **Dark Reader** action in the menu bar. The action is only enabled for PDF and EPUB documents.
+- There is no default keyboard shortcut. Assign one in **Settings → Configure Keyboard Shortcuts** (search for "Dark Reader").
+- Choose the background in **Settings → Configure Okular → Accessibility**: select *Dark Reader* as the color mode, then pick *Default*, *From color scheme* or *Custom*.
 
-https://bugs.kde.org/buglist.cgi?product=okular
+## Known limitations
 
-Please report bugs on Bugzilla (https://bugs.kde.org/enter_bug.cgi?product=okular), and not on our GitLab instance (https://invent.kde.org).
+- Supported formats: PDF and EPUB only. Other formats are unchanged from Okular.
+- Image protection for PDFs needs a build against Poppler's core library (see [Building](#building)). Without it, Dark Reader still works but recolors images too.
+- For PDFs, image protection works on local files only and is not available for password-protected documents; those fall back to recoloring the whole page.
+- Images are excluded by bounding box. Text printed directly over an image is not recolored, and a rotated or skewed image may leave a thin sliver of surrounding background untouched.
+- PDF rendering opens the file a second time to build the image mask, which increases memory use for large documents.
+- The text color is currently fixed (`#eff0f1`); only the background is configurable.
 
-### Mailing list
+## Building
 
-https://mail.kde.org/mailman/listinfo/okular-devel
+Dracular builds like Okular. It tracks Okular's development branch, so it needs recent Qt and KDE Frameworks, which many stable distributions do not ship yet.
 
-### Source code
+Requirements:
 
-https://invent.kde.org/graphics/okular.git
+- Qt 6.6 or newer
+- KDE Frameworks 6
+- Poppler 24.08 or newer with the Qt 6 bindings
+- **Poppler core headers** (`SplashOutputDev.h` and friends), which some distributions only install when Poppler is built with `ENABLE_UNSTABLE_API_ABI_HEADERS`. CMake only reports the core library as optional, but the exact image mask depends on it. After configuring, you can confirm it is active:
 
-The Okular repository contains the source code for:
- * the `okular` desktop application (the “shell”),
- * the `okularpart` KParts plugin,
- * the `okularkirigami` mobile application,
- * several `okularGenerator_xyz` plugins, which provide backends for different document types.
+  ```bash
+  grep -q darkreaderoutputdev.cpp build/build.ninja && echo "image mask: enabled"
+  ```
 
-### Apidox
+The easiest way to pull in most dependencies is your distribution's Okular build dependencies:
 
-https://api.kde.org/okular/html/index.html
+```bash
+# Fedora
+sudo dnf builddep okular
+# Debian / Ubuntu
+sudo apt build-dep okular
+```
+
+Then build and install into a private prefix:
+
+```bash
+git clone https://github.com/GaurabPrasai/dracular.git
+cd dracular
+cmake -S . -B build -G Ninja \
+      -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+      -DOKULAR_UI=desktop \
+      -DCMAKE_INSTALL_PREFIX="$HOME/.local/dracular"
+cmake --build build
+cmake --install build
+```
+
+Run it with the helper script that CMake generates, which sets up the environment for a non-system prefix:
+
+```bash
+source build/prefix.sh
+okular
+```
+
+> **Note:** Dracular currently installs as `okular` and uses Okular's application ID and configuration. Do not install it into the same prefix as a system Okular, and expect it to share settings with any other Okular on your account.
+
+To run the test suite (needs a display or Xvfb, and an installed build):
+
+```bash
+cmake --install build
+source build/prefix.sh
+ctest --test-dir build --output-on-failure
+```
+
+## Project status and upstream
+
+Dracular is based on Okular's `master` branch and is maintained independently. It is not affiliated with or endorsed by KDE. Dracular's own changes are kept as small and self-contained as practical so that upstream changes, including bug and security fixes, can be merged in. Features are added to Dracular on its own schedule and do not depend on upstream acceptance.
+
+For general Okular usage (annotations, forms, signatures, supported formats), see the [Okular handbook](https://docs.kde.org/?application=okular). Bugs that also reproduce in stock Okular belong in [KDE's bug tracker](https://bugs.kde.org/enter_bug.cgi?product=okular); bugs in Dark Reader or anything else specific to this fork belong in this repository's [issues](https://github.com/GaurabPrasai/dracular/issues).
 
 ## Contributing
 
-Okular uses the merge request workflow.
-Merge requests are required to run pre-commit CI jobs; please don’t push to the master branch directly.
-See https://community.kde.org/Infrastructure/GitLab for an introduction.
+Issues and pull requests are welcome.
 
-### Build instructions
+- Open pull requests against `master`. CI builds the project and checks formatting.
+- Code is formatted with **clang-format 19** using the repository's `_clang-format` configuration. To format a file: `clang-format -i path/to/file.cpp`.
+- Keep Dracular-specific code in new files where possible, with minimal hooks into existing Okular code. This keeps future upstream merges manageable.
+- Keep the SPDX license header on every file you add.
 
-Okular can be built like many other applications developed by KDE.
-See https://community.kde.org/Get_Involved/development for an introduction.
+## Credits and license
 
-If your build environment is set up correctly, you can also build Okular using CMake:
+Dracular is a fork of [Okular](https://invent.kde.org/graphics/okular) by the KDE community and its contributors. The Dark Reader - Dracular is maintained by [Bipin Thapa](https://github.com/justbipin) and [Gaurab Prasai](https://github.com/gaurabprasai).
 
-```bash
-git clone https://invent.kde.org/graphics/okular.git
-cd okular
-mkdir build
-cd build
-cmake -DCMAKE_INSTALL_PREFIX=/path/to/your/install/dir ..
-make
-make install
-```
-
-Okular also builds tests in the build tree. To run them, you have to run `make install` first.
-
-If you install Okular in a different path than your system install directory it is possible that you need to run
-
-```bash
-source prefix.sh
-```
-
-so that the correct Okular instance and libraries are picked up.
-Afterwards one can run `okular` inside the shell instance.
-The source command is also required to run the tests manually.
-
-As stated above, Okular has various build targets.
-Two of them are executables.
-You can choose which executable to build by passing a flag to CMake:
-
-```bash
-cmake -DCMAKE_INSTALL_PREFIX=/path/to/your/install/dir -DOKULAR_UI=desktop ..
-```
-Available options are `desktop`, `mobile`, and `both`.
-
-### clang-format
-
-The Okular project uses clang-format to enforce source code formatting.
-See [README.clang_format](https://invent.kde.org/graphics/okular/-/blob/master/README.clang-format) for more information.
+Okular and Dracular are free software, licensed under the GPL (see the SPDX headers in each file and the [`LICENSES`](LICENSES) directory). Original copyright notices from Okular are retained.
