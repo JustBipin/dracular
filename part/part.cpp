@@ -56,6 +56,8 @@
 #include <QStandardPaths>
 #include <QTemporaryFile>
 #include <QTimer>
+#include <QToolBar>
+#include <QToolButton>
 #include <QWidgetAction>
 
 #include <KAboutPluginDialog>
@@ -2332,6 +2334,13 @@ void Part::updateViewActions()
         m_darkReaderAction->setEnabled(opened && isSupported);
         if (!isSupported && m_darkReaderAction->isChecked()) {
             m_darkReaderAction->setChecked(false);
+        }
+        // The toolbar shows icon-only buttons by default; force text beside
+        // the moon icon for this toggle so it is recognizable at a glance.
+        if (auto *toolBar = qobject_cast<QToolBar *>(hostContainer(QStringLiteral("mainToolBar")))) {
+            if (auto *button = qobject_cast<QToolButton *>(toolBar->widgetForAction(m_darkReaderAction))) {
+                button->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+            }
         }
     }
 

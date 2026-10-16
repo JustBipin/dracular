@@ -109,6 +109,7 @@
   <Action name="view_zoom_out"/>
   <Action name="zoom_to" />
   <Action name="view_render_mode"/>
+  <Action name="dark_reader_mode"/>
   <Spacer/>
   <Action name="page_number"/>
   <Spacer/>
