@@ -16,9 +16,9 @@
 inline KAboutData okularAboutData()
 {
     KAboutData about(QStringLiteral("okular"),
-                     i18n("Okular"),
+                     i18n("Dracular"),
                      QStringLiteral(OKULAR_VERSION_STRING),
-                     i18n("Okular, a universal document viewer"),
+                     i18n("Dracular, a document viewer with dark mode built for reading"),
                      KAboutLicense::GPL,
                      i18n("(C) 2002 Wilco Greven, Christophe Devriese\n"
                           "(C) 2004-2005 Enrico Ros\n"

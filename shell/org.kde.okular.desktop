@@ -1,6 +1,6 @@
 [Desktop Entry]
 Terminal=false
-Name=Okular
+Name=Dracular
 Name[ar]=اوكلار
 Name[az]=Okular
 Name[be]=Okular
@@ -191,7 +191,7 @@ Comment[vi]=Trình xem tài liệu vạn năng
 Comment[zh_CN]=通用文档查看器
 Comment[zh_TW]=通用文件檢視器
 Exec=okular %U
-Icon=okular
+Icon=dracular
 Type=Application
 X-DocPath=okular/index.html
 InitialPreference=7

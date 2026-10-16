@@ -152,7 +152,7 @@ WelcomeScreen::~WelcomeScreen()
 void WelcomeScreen::showEvent(QShowEvent *e)
 {
     if (appIcon->pixmap(Qt::ReturnByValue).isNull()) {
-        appIcon->setPixmap(QIcon::fromTheme(QStringLiteral("okular")).pixmap(KIconLoader::SizeEnormous));
+        appIcon->setPixmap(QIcon::fromTheme(QStringLiteral("dracular")).pixmap(KIconLoader::SizeEnormous));
     }
 
     QWidget::showEvent(e);

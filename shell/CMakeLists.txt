@@ -21,7 +21,7 @@ set(okular_SRCS
 ki18n_wrap_ui(okular_SRCS
     welcomescreen.ui)
 
-file(GLOB ICONS_SRCS "${CMAKE_CURRENT_SOURCE_DIR}/../icons/*-apps-okular.png")
+file(GLOB ICONS_SRCS "${CMAKE_CURRENT_SOURCE_DIR}/../icons/*-apps-okular.png" "${CMAKE_CURRENT_SOURCE_DIR}/../icons/*-apps-dracular.png")
 ecm_add_app_icon(okular_SRCS ICONS ${ICONS_SRCS})
 
 add_executable(okular ${okular_SRCS})
@@ -51,5 +51,5 @@ endif()
 
 # okular shell data files
 
-install( PROGRAMS org.kde.okular.desktop  DESTINATION  ${KDE_INSTALL_APPDIR} )
-install( FILES org.kde.okular.appdata.xml DESTINATION  ${KDE_INSTALL_METAINFODIR} )
+install( PROGRAMS org.kde.okular.desktop org.kde.dracular.desktop DESTINATION  ${KDE_INSTALL_APPDIR} )
+install( FILES org.kde.okular.appdata.xml org.kde.dracular.metainfo.xml DESTINATION  ${KDE_INSTALL_METAINFODIR} )
