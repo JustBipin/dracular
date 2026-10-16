@@ -236,6 +236,31 @@ else()
     add_definitions(-DHAVE_POPPLER_CORE_OUTPUTDEV=0)
 endif()
 
+# Poppler removed the reverseVideo argument from SplashOutputDev's
+# constructor between 26.01 and 26.08. Detect the supported signature with a
+# compile check instead of guessing from the version number, so both older
+# (e.g. distro) and newer (e.g. Flatpak-bundled) Poppler build.
+if (TARGET Poppler::Core)
+    include(CheckCXXSourceCompiles)
+    get_target_property(_poppler_core_includes Poppler::Core INTERFACE_INCLUDE_DIRECTORIES)
+    if (_poppler_core_includes)
+        set(CMAKE_REQUIRED_INCLUDES ${_poppler_core_includes})
+    endif()
+    set(CMAKE_REQUIRED_LIBRARIES Poppler::Core)
+    check_cxx_source_compiles("
+#include <SplashOutputDev.h>
+int main() {
+    SplashColor paperColor;
+    paperColor[0] = 255; paperColor[1] = 255; paperColor[2] = 255;
+    SplashOutputDev dev(splashModeXBGR8, 4, paperColor, true, splashThinLineDefault);
+    (void)dev;
+    return 0;
+}
+" HAVE_POPPLER_SPLASH_NO_REVERSE_VIDEO)
+    unset(CMAKE_REQUIRED_INCLUDES)
+    unset(CMAKE_REQUIRED_LIBRARIES)
+endif()
+
 find_package(Freetype)
 set_okular_optional_package_properties(Freetype PROPERTIES
         DESCRIPTION  "A font rendering engine"
