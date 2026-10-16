@@ -52,14 +52,22 @@ inline QPen buildPen(const Okular::Annotation *ann, double width, const QColor &
  * Fetches the "exclude from recoloring" mask a generator may have produced
  * for @p page (currently: the PDF generator's Dark Reader render path and the
  * text-document generator, i.e. EPUB; see PDFGenerator::metaData()'s and
- * TextDocumentGeneratorPrivate::metaData()'s "NoRecolorMask" key), and adapts
- * it to line up pixel-for-pixel with the region about to be painted.
+ * TextDocumentGeneratorPrivate::metaData()'s "NoRecolorMask" key), and
+ * reports where the region about to be painted sits inside it.
  *
  * @p fullPageDeviceSize is the size, in device pixels, of the full
  * (uncropped) page at the current zoom level; @p deviceRectInFullPage is the
  * sub-rectangle of that full page, also in device pixels, that is actually
- * being painted right now (i.e. what \c backImage covers). Both mirror
+ * being painted right now (i.e. what the recolored image covers). Both mirror
  * exactly how the page pixmap itself is scaled and cropped a few lines below.
+ *
+ * Returns the mask at @p fullPageDeviceSize without copying or cropping it:
+ * when the generator already produced it at that size no scaling happens
+ * either (QImage implicit sharing, so no per-paint allocation), and the
+ * top-left of @p deviceRectInFullPage within the returned mask is written to
+ * @p maskOffsetOut for offset-based access by recolorExcludingMask(). In the
+ * rare case where @p deviceRectInFullPage extends beyond the page, falls back
+ * to returning a cropped copy with a (0, 0) offset, as before.
  *
  * Returns a null QImage if no mask is available, e.g. because the document's
  * backend does not provide masks, the page has no images, Dark Reader has not
@@ -67,8 +75,11 @@ inline QPen buildPen(const Okular::Annotation *ann, double width, const QColor &
  * headers. Callers must treat a null mask as "nothing is excluded", not as an
  * error.
  */
-static QImage fetchNoRecolorMask(const Okular::Page *page, const QSize &fullPageDeviceSize, const QRect &deviceRectInFullPage)
+static QImage fetchNoRecolorMask(const Okular::Page *page, const QSize &fullPageDeviceSize, const QRect &deviceRectInFullPage, QPoint *maskOffsetOut)
 {
+    if (maskOffsetOut) {
+        *maskOffsetOut = QPoint();
+    }
     if (!page || fullPageDeviceSize.isEmpty() || deviceRectInFullPage.isEmpty()) {
         return QImage();
     }
@@ -91,9 +102,10 @@ static QImage fetchNoRecolorMask(const Okular::Page *page, const QSize &fullPage
     // The mask was generated at the same nominal resolution as the pixmap
     // request that produced it, which will not always exactly match the
     // page's current on-screen size (e.g. a cached pixmap from a slightly
-    // different zoom level being reused momentarily). Scale and crop it
-    // exactly like the page pixmap itself is scaled and cropped, so it lines
-    // up with the image being recolored.
+    // different zoom level being reused momentarily). Scale it exactly like
+    // the page pixmap itself is scaled, so it lines up with the image being
+    // recolored. When the generator already sized it correctly (the common
+    // case) this is skipped entirely: no per-paint rescale allocation.
     if (mask.size() != fullPageDeviceSize) {
         mask = mask.scaled(fullPageDeviceSize);
     }
@@ -103,7 +115,18 @@ static QImage fetchNoRecolorMask(const Okular::Page *page, const QSize &fullPage
         return QImage();
     }
 
-    return mask.copy(clampedRect);
+    if (clampedRect != deviceRectInFullPage) {
+        // Painted region extends beyond the page; keep the legacy cropped copy
+        // (downstream size check then recolors everything, as before).
+        return mask.copy(clampedRect);
+    }
+
+    // Common case: hand back the full-page mask (implicitly shared, no copy)
+    // and let the caller index it at this offset.
+    if (maskOffsetOut) {
+        *maskOffsetOut = clampedRect.topLeft();
+    }
+    return mask;
 }
 
 void PagePainter::paintPageOnPainter(QPainter *destPainter, const Okular::Page *page, Okular::DocumentObserver *observer, int flags, int scaledWidth, int scaledHeight, const QRect limits)
@@ -400,8 +423,9 @@ void PagePainter::paintCroppedPageOnPainter(QPainter *destPainter,
                     bgColor = QColor(0x23, 0x26, 0x27);
                     break;
                 }
-                const QImage noRecolorMask = fetchNoRecolorMask(page, QSize(dScaledWidth, dScaledHeight), dLimitsInPixmap);
-                recolorExcludingMask(&backImage, QColor(0xef, 0xf0, 0xf1), bgColor, noRecolorMask);
+                QPoint maskOffset;
+                const QImage noRecolorMask = fetchNoRecolorMask(page, QSize(dScaledWidth, dScaledHeight), dLimitsInPixmap, &maskOffset);
+                recolorExcludingMask(&backImage, QColor(0xef, 0xf0, 0xf1), bgColor, noRecolorMask, maskOffset);
                 break;
             }
             }
@@ -839,7 +863,7 @@ void PagePainter::recolor(QImage *image, const QColor &foreground, const QColor 
     }
 }
 
-void PagePainter::recolorExcludingMask(QImage *image, const QColor &foreground, const QColor &background, const QImage &noRecolorMask)
+void PagePainter::recolorExcludingMask(QImage *image, const QColor &foreground, const QColor &background, const QImage &noRecolorMask, const QPoint &maskOffset)
 {
     if (noRecolorMask.isNull()) {
         recolor(image, foreground, background);
@@ -853,8 +877,13 @@ void PagePainter::recolorExcludingMask(QImage *image, const QColor &foreground, 
 
     Q_ASSERT(image->format() == QImage::Format_ARGB32_Premultiplied);
 
-    if (noRecolorMask.size() != image->size()) {
-        qCWarning(OkularUiDebug) << "noRecolorMask size does not match image size, ignoring it";
+    // The mask either matches the image exactly (zero offset, as before) or
+    // covers a larger area of which the image is the sub-rectangle starting
+    // at maskOffset, so the full-page mask can be indexed directly without a
+    // per-paint copy/crop. Both sizes are in the same device pixels, so no
+    // rescaling is ever done here.
+    if (maskOffset.x() < 0 || maskOffset.y() < 0 || maskOffset.x() + image->width() > noRecolorMask.width() || maskOffset.y() + image->height() > noRecolorMask.height()) {
+        qCWarning(OkularUiDebug) << "noRecolorMask size/offset does not match image size, ignoring it";
         recolor(image, foreground, background);
         return;
     }
@@ -881,7 +910,9 @@ void PagePainter::recolorExcludingMask(QImage *image, const QColor &foreground, 
     const bool isDarkMode = qGray(background.rgb()) < qGray(foreground.rgb());
 
     for (int y = 0, i = 0; y < image->height(); ++y) {
-        const uchar *maskRow = mask.constScanLine(y);
+        // Mask-row check comes first so excluded (image) pixels skip all
+        // recolor work below; row pointer folds in the page offset.
+        const uchar *maskRow = mask.constScanLine(y + maskOffset.y()) + maskOffset.x();
         for (int x = 0; x < image->width(); ++x, ++i) {
             if (maskRow[x] >= 128) {
                 // Exclude from recoloring
