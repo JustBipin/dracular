@@ -42,6 +42,7 @@
     <Action name="view_auto_fit"/>
     <Separator/>
     <Action name="view_render_mode"/>
+    <Action name="dark_reader_mode"/>
     <Separator/>
     <Menu name="view_orientation"><text>&amp;Orientation</text>
       <Action name="view_orientation_rotate_ccw"/>
@@ -100,7 +101,6 @@
   <Menu name="help"><text>&amp;Help</text>
     <Action name="help_about_backend" group="about_merge"/>
   </Menu>
-  <Action name="dark_reader_mode"/>
 </MenuBar>
 <ToolBar name="mainToolBar"><text>Main Toolbar</text>
   <Action name="show_leftpanel"/>
