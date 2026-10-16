@@ -970,7 +970,7 @@ void Part::setupActions()
     // PDF documents and for text-document backends such as EPUB; see updateViewActions().
     m_darkReaderAction = ac->add<KToggleAction>(QStringLiteral("dark_reader_mode"));
     m_darkReaderAction->setText(i18nc("@action:inmenu, toggles the dark color scheme for the document", "Dark Reader"));
-    m_darkReaderAction->setIcon(QIcon::fromTheme(QStringLiteral("view-dark-mode"), QIcon::fromTheme(QStringLiteral("weather-clear-night"))));
+    m_darkReaderAction->setIcon(QIcon::fromTheme(QStringLiteral("weather-clear-night")));
     m_darkReaderAction->setWhatsThis(i18n("Toggles a dark color scheme for the document: text is drawn light on a dark background, while images are left unaffected."));
     connect(m_darkReaderAction, &QAction::toggled, this, &Part::slotToggleDarkReader);
     connect(Okular::SettingsCore::self(), &Okular::SettingsCore::colorModesChanged, this, &Part::slotUpdateDarkReaderAction);
