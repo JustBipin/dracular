@@ -1,6 +1,6 @@
 <?xml version="1.0"?>
 <!DOCTYPE gui SYSTEM "kpartgui.dtd">
-<gui name="okular_part" version="57">
+<gui name="okular_part" version="58">
 <MenuBar>
   <Menu name="file"><text>&amp;File</text>
     <Action name="get_new_stuff" group="file_open"/>
@@ -102,7 +102,7 @@
     <Action name="help_about_backend" group="about_merge"/>
   </Menu>
 </MenuBar>
-<ToolBar name="mainToolBar"><text>Main Toolbar</text>
+<ToolBar name="mainToolBar" iconText="textbesideicon">
   <Action name="show_leftpanel"/>
   <Separator/>
   <Action name="view_zoom_in"/>
@@ -111,6 +111,9 @@
   <Action name="view_render_mode"/>
   <Action name="dark_reader_mode"/>
   <Spacer/>
+  <Action name="view_orientation_rotate_ccw"/>
+  <Action name="view_orientation_rotate_cw"/>
+  <Separator />
   <Action name="page_number"/>
   <Spacer/>
   <Action name="mouse_drag"/>

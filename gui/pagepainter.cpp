@@ -99,6 +99,16 @@ static QImage fetchNoRecolorMask(const Okular::Page *page, const QSize &fullPage
         return QImage();
     }
 
+    // Generators always return unrotated images; the core rotates the page
+    // pixmap afterwards (see RotationJob). The mask comes straight from the
+    // generator, so it has to be rotated the same way, otherwise it is
+    // stretched over the wrong area of the rotated page.
+    if (page->rotation() != Okular::Rotation0) {
+        QTransform rotation;
+        rotation.rotate(static_cast<int>(page->rotation()) * 90);
+        mask = mask.transformed(rotation);
+    }
+
     // The mask was generated at the same nominal resolution as the pixmap
     // request that produced it, which will not always exactly match the
     // page's current on-screen size (e.g. a cached pixmap from a slightly
