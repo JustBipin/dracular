@@ -23,5 +23,8 @@
 /* Defines if qtmultimedia is available */
 #cmakedefine01 HAVE_MULTIMEDIA
 
+/* Defines whether Poppler's SplashOutputDev constructor still takes a reverseVideo argument */
+#cmakedefine01 HAVE_POPPLER_SPLASH_NO_REVERSE_VIDEO
+
 /* Defines whether we are building with dbus enabled */
 #cmakedefine01 HAVE_DBUS

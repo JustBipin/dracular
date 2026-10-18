@@ -6,6 +6,8 @@
 
 #include "darkreaderoutputdev.h"
 
+#include "config-okular.h"
+
 #include <GfxState.h>
 #include <GlobalParams.h>
 #include <Object.h>
@@ -45,11 +47,16 @@ namespace
 class MaskingSplashOutputDev : public SplashOutputDev
 {
 public:
-    // Note: current Poppler no longer takes a reverseVideo argument in
-    // SplashOutputDev's constructor (removed upstream, since every caller
-    // passed false), so the base is constructed without it.
+    // Poppler 26.08 removed the reverseVideo constructor argument (every
+    // historical caller passed false); older releases still require it, so
+    // the call is selected by the HAVE_POPPLER_SPLASH_NO_REVERSE_VIDEO
+    // configure check rather than a version guess.
     MaskingSplashOutputDev(SplashColorMode colorModeA, int bitmapRowPadA, SplashColorPtr paperColorA, bool bitmapTopDownA, SplashThinLineMode thinLineModeA)
+#if HAVE_POPPLER_SPLASH_NO_REVERSE_VIDEO
         : SplashOutputDev(colorModeA, bitmapRowPadA, paperColorA, bitmapTopDownA, thinLineModeA)
+#else
+        : SplashOutputDev(colorModeA, bitmapRowPadA, false, paperColorA, bitmapTopDownA, thinLineModeA)
+#endif
     {
     }
 

@@ -10,6 +10,7 @@
 #include <QBrush>
 #include <QImage>
 #include <QPen>
+#include <QPoint>
 
 #include "core/annotations.h"
 #include "core/area.h" // for NormalizedPoint
@@ -107,9 +108,16 @@ private:
      * to @p background), then restores the original pixel value wherever
      * @p noRecolorMask says the pixel should be excluded from recoloring.
      *
-     * @p noRecolorMask is a Format_Grayscale8 image the same size as @p image,
-     * where 255 means "leave this pixel untouched" and 0 means "recolor it
-     * normally"; if it is null, this behaves exactly like recolor().
+     * @p noRecolorMask is a Format_Grayscale8 image where 255 means "leave
+     * this pixel untouched" and 0 means "recolor it normally"; if it is null,
+     * this behaves exactly like recolor().
+     *
+     * @p noRecolorMask may either be exactly the size of @p image (with
+     * @p maskOffset left at its default (0, 0)), or cover a larger area
+     * (e.g. the full page in device pixels) of which @p image is the
+     * sub-rectangle starting at @p maskOffset. The offset form avoids a
+     * per-paint copy/crop of the mask; pixels with mask value >= 128 are
+     * skipped before any recolor work.
      *
      * Used by Dark Reader mode to recolor page text/background while leaving
      * embedded raster images untouched. Unlike a heuristic based on the
@@ -118,7 +126,7 @@ private:
      * the PDF generator's use of its custom Poppler OutputDev), so it is not
      * fooled by grayscale or muted-color photos.
      */
-    static void recolorExcludingMask(QImage *image, const QColor &foreground, const QColor &background, const QImage &noRecolorMask);
+    static void recolorExcludingMask(QImage *image, const QColor &foreground, const QColor &background, const QImage &noRecolorMask, const QPoint &maskOffset = QPoint());
     // END Change Colors feature
 
     // my pretty dear raster function

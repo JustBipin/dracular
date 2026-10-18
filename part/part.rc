@@ -42,6 +42,7 @@
     <Action name="view_auto_fit"/>
     <Separator/>
     <Action name="view_render_mode"/>
+    <Action name="dark_reader_mode"/>
     <Separator/>
     <Menu name="view_orientation"><text>&amp;Orientation</text>
       <Action name="view_orientation_rotate_ccw"/>

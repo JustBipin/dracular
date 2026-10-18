@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<component type="desktop">
+  <id>org.kde.dracular.desktop</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-2.0+ and GFDL-1.3</project_license>
+  <name>Dracular</name>
+  <summary>View and annotate documents, with dark mode built for reading</summary>
+  <description>
+    <p>
+   Dracular is an independent fork of Okular, KDE's universal document viewer, with a dark mode built for reading: text and backgrounds turn dark, images stay exactly as they are.
+  </p>
+    <p>Features:</p>
+    <ul>
+      <li>Dark Reader mode for PDF and EPUB documents; embedded images are left untouched</li>
+      <li>Supported Formats: PDF, PS, Tiff, DjVu, Images, DVI, XPS, Fiction Book, Comic Book, Plucker, EPub, Fax</li>
+      <li>Sidebar with contents, thumbnails, reviews and bookmarks</li>
+      <li>Annotations support</li>
+    </ul>
+  </description>
+  <developer>
+    <name>Dracular contributors</name>
+    <url>https://github.com/GaurabPrasai/dracular</url>
+  </developer>
+  <url type="homepage">https://github.com/GaurabPrasai/dracular</url>
+  <project_group>KDE</project_group>
+  <provides>
+    <binary>okular</binary>
+  </provides>
+  <content_rating type="oars-1.1"/>
+  <launchable type="desktop-id">org.kde.dracular.desktop</launchable>
+</component>

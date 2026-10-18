@@ -314,6 +314,7 @@ Document::OpenResult TextDocumentGenerator::loadDocumentWithPassword(const QStri
     // reparseConfig().
     d->mDarkReaderActive = SettingsCore::changeColors() && SettingsCore::renderMode() == SettingsCore::EnumRenderMode::DarkReader;
     d->mDarkReaderMasks.clear();
+    d->mDarkReaderMaskOrder.clear();
     d->generateTitleInfos();
     const QList<TextDocumentGeneratorPrivate::LinkInfo> linkInfos = d->generateLinkInfos();
     const QList<TextDocumentGeneratorPrivate::AnnotationInfo> annotationInfos = d->generateAnnotationInfos();
@@ -372,6 +373,7 @@ bool TextDocumentGenerator::doCloseDocument()
     d->mDocumentSynopsis = Okular::DocumentSynopsis();
 
     d->mDarkReaderMasks.clear();
+    d->mDarkReaderMaskOrder.clear();
 
     return true;
 }
@@ -474,11 +476,48 @@ QVariant TextDocumentGeneratorPrivate::metaData(const QString &key, const QVaria
         // has no images at all, in which case PagePainter recolors the whole
         // page (which is then exactly right).
         const int pageNumber = option.toInt();
-        auto it = mDarkReaderMasks.constFind(pageNumber);
-        if (it == mDarkReaderMasks.constEnd()) {
-            it = mDarkReaderMasks.insert(pageNumber, darkReaderNoRecolorMask(pageNumber));
+        if (pageNumber < 0) {
+            return QVariant::fromValue(QImage());
         }
-        return QVariant::fromValue(it.value());
+#ifdef OKULAR_TEXTDOCUMENT_THREADED_RENDERING
+        Q_Q(const TextDocumentGenerator);
+        q->userMutex()->lock();
+        auto hit = mDarkReaderMasks.constFind(pageNumber);
+        if (hit != mDarkReaderMasks.constEnd()) {
+            const QImage cached = hit.value();
+            mDarkReaderMaskOrder.removeOne(pageNumber);
+            mDarkReaderMaskOrder.append(pageNumber);
+            q->userMutex()->unlock();
+            return QVariant::fromValue(cached);
+        }
+        q->userMutex()->unlock();
+        // Built outside the hash lock so the layout walk in
+        // darkReaderNoRecolorMask() (which takes userMutex() itself) never
+        // nests locks; lazy build keeps the first-paint cost to this page only.
+        const QImage built = darkReaderNoRecolorMask(pageNumber);
+        q->userMutex()->lock();
+        auto hit2 = mDarkReaderMasks.constFind(pageNumber);
+        if (hit2 != mDarkReaderMasks.constEnd()) {
+            const QImage existing = hit2.value();
+            mDarkReaderMaskOrder.removeOne(pageNumber);
+            mDarkReaderMaskOrder.append(pageNumber);
+            q->userMutex()->unlock();
+            return QVariant::fromValue(existing);
+        }
+        insertDarkReaderMask(pageNumber, built);
+        q->userMutex()->unlock();
+        return QVariant::fromValue(built);
+#else
+        auto it = mDarkReaderMasks.constFind(pageNumber);
+        if (it != mDarkReaderMasks.constEnd()) {
+            mDarkReaderMaskOrder.removeOne(pageNumber);
+            mDarkReaderMaskOrder.append(pageNumber);
+            return QVariant::fromValue(it.value());
+        }
+        const QImage built = darkReaderNoRecolorMask(pageNumber);
+        insertDarkReaderMask(pageNumber, built);
+        return QVariant::fromValue(built);
+#endif
     }
     return QVariant();
 }
@@ -501,6 +540,10 @@ QVariant TextDocumentGeneratorPrivate::metaData(const QString &key, const QVaria
  */
 QImage TextDocumentGeneratorPrivate::darkReaderNoRecolorMask(int pageNumber) const
 {
+#ifdef OKULAR_TEXTDOCUMENT_THREADED_RENDERING
+    Q_Q(const TextDocumentGenerator);
+    QMutexLocker locker(q->userMutex());
+#endif
     if (!mDocument || pageNumber < 0) {
         return QImage();
     }
@@ -558,6 +601,19 @@ QImage TextDocumentGeneratorPrivate::darkReaderNoRecolorMask(int pageNumber) con
     }
 
     return mask;
+}
+
+void TextDocumentGeneratorPrivate::insertDarkReaderMask(int pageNumber, const QImage &mask) const
+{
+    // Caller holds userMutex() when OKULAR_TEXTDOCUMENT_THREADED_RENDERING is
+    // enabled. Keeps the cache bounded by evicting the oldest entry first.
+    if (mDarkReaderMasks.size() >= DarkReaderMaskCacheLimit && !mDarkReaderMasks.contains(pageNumber)) {
+        const int oldest = mDarkReaderMaskOrder.takeFirst();
+        mDarkReaderMasks.remove(oldest);
+    }
+    mDarkReaderMasks.insert(pageNumber, mask);
+    mDarkReaderMaskOrder.removeOne(pageNumber);
+    mDarkReaderMaskOrder.append(pageNumber);
 }
 
 Okular::ExportFormat::List TextDocumentGenerator::exportFormats() const
@@ -630,6 +686,14 @@ bool TextDocumentGenerator::reparseConfig()
         if (d->mDocument) {
             d->mDocument->setDefaultFont(d->mFont);
         }
+        // The masks are tied to the document layout, which the font change
+        // above may just have invalidated; regenerate them on demand.
+        // A Dark Reader toggle alone (below) keeps the reusable geometry.
+#ifdef OKULAR_TEXTDOCUMENT_THREADED_RENDERING
+        QMutexLocker locker(userMutex());
+#endif
+        d->mDarkReaderMasks.clear();
+        d->mDarkReaderMaskOrder.clear();
         somethingchanged = true;
     }
 
@@ -641,13 +705,9 @@ bool TextDocumentGenerator::reparseConfig()
     const bool darkReaderActive = SettingsCore::changeColors() && SettingsCore::renderMode() == SettingsCore::EnumRenderMode::DarkReader;
     if (darkReaderActive != d->mDarkReaderActive) {
         d->mDarkReaderActive = darkReaderActive;
+        // Keep the cached mask geometry: image rects only change with the
+        // layout, so a mode toggle reuses them.
         somethingchanged = true;
-    }
-
-    if (somethingchanged) {
-        // The masks are tied to the document layout, which the font change
-        // above may just have invalidated; regenerate them on demand.
-        d->mDarkReaderMasks.clear();
     }
 
     return somethingchanged;
@@ -679,6 +739,7 @@ void TextDocumentGenerator::setTextDocument(QTextDocument *textDocument)
 
     d->mDocument = textDocument;
     d->mDarkReaderMasks.clear();
+    d->mDarkReaderMaskOrder.clear();
 
     for (Page *p : std::as_const(d->m_document->m_pagesVector)) {
         p->setTextPage(nullptr);

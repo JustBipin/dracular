@@ -10,6 +10,7 @@
 #include <QAbstractTextDocumentLayout>
 #include <QHash>
 #include <QImage>
+#include <QList>
 #include <QTextBlock>
 #include <QTextDocument>
 
@@ -261,13 +262,34 @@ public:
     QFont mFont;
 
     /**
+     * Dark Reader: bound for the on-demand "exclude from recoloring" masks.
+     * Keeps memory bounded on long documents; the oldest entry is evicted
+     * first once the limit is reached.
+     */
+    static constexpr int DarkReaderMaskCacheLimit = 30;
+
+    /**
      * Dark Reader: the "exclude from recoloring" masks of the pages, created
      * on demand (PagePainter asks for one on every paint of a page, while the
      * underlying image rects only change when the document layout does).
      * A page whose images were already looked for is present in the hash even
      * if it turned out to have none, in which case its mask is a null image.
+     * Bounded by DarkReaderMaskCacheLimit with oldest-first (LRU) eviction
+     * tracked in mDarkReaderMaskOrder (front = oldest).
+     * Invalidation: cleared on font/mDocument/layout change (see
+     * reparseConfig(), setTextDocument(), load/close); a Dark Reader toggle
+     * alone keeps the reusable geometry. Guarded by userMutex() wherever
+     * OKULAR_TEXTDOCUMENT_THREADED_RENDERING is enabled; see
+     * metaData()/darkReaderNoRecolorMask().
      */
     mutable QHash<int, QImage> mDarkReaderMasks;
+    mutable QList<int> mDarkReaderMaskOrder;
+
+    /**
+     * Dark Reader: bounded insert with oldest-first eviction. The caller must
+     * hold userMutex() when OKULAR_TEXTDOCUMENT_THREADED_RENDERING is enabled.
+     */
+    void insertDarkReaderMask(int pageNumber, const QImage &mask) const;
 
     /**
      * Dark Reader: state of the mode at the last reparseConfig(), so that a

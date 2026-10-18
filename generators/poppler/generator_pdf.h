@@ -17,6 +17,7 @@
 #include <poppler-version.h>
 
 #include <QBitArray>
+#include <QMutex>
 #include <QPointer>
 #include <QSet>
 
@@ -180,22 +181,57 @@ private:
 #if HAVE_POPPLER_CORE_OUTPUTDEV
     // BEGIN Dark Reader exact image mask
 
-    // Makes sure m_darkReaderMaskCache has a valid mask for @p page at the
-    // given resolution, generating one via DarkReaderRenderer if needed.
-    // No-op if a matching mask is already cached.
-    void ensureDarkReaderMask(const Okular::Page *page, double dpiX, double dpiY);
+    // Maximum number of page entries kept in m_darkReaderMaskCache. Bounded
+    // LRU: when full, the least recently requested page entry (both mask72
+    // and scaledMask) is evicted. Full-entry eviction (rather than dropping
+    // only scaledMask and retaining mask72) was chosen because re-priming a
+    // base mask is cheap (one 72 DPI secondary render, ~5ms) while keeping
+    // only one image per entry keeps peak memory predictable: mask72 is
+    // ~0.5MB (72 DPI Grayscale8) and scaledMask is a few MB at typical zooms.
+    static constexpr int DarkReaderMaskCacheCapacity = 20;
+
+    // Primes the 72 DPI base mask for @p pageNum via the secondary
+    // DarkReaderRenderer, opening it from @p filePath (no-op when @p
+    // filePath is empty or @p hasPassword is set; password-protected
+    // documents are unsupported, see DarkReaderRenderer::create()).
+    // Callers pass snapshots of documentFilePath/documentHasPassword copied
+    // under userMutex(). Never holds userMutex itself: the secondary PDFDoc
+    // is fully independent of pdfdoc, so the 72 DPI raster (displayPageSlice
+    // + bitmap copy) must not serialize against primary raster work.
+    // Concurrent secondary renders are still serialized against each other
+    // by m_darkReaderMaskMutex (Poppler's core PDFDoc is not documented as
+    // thread-safe, so concurrent displayPageSlice calls are avoided even on
+    // independent documents).
+    void ensureDarkReaderBaseMask(int pageNum, const QString &filePath, bool hasPassword);
+
+    // Scales the cached 72 DPI base mask for @p pageNum to @p targetSize
+    // (the actual primary bitmap size, see image()) and records @p fullDpiX
+    // / @p fullDpiY as the single-slot cache key for that page. Tile
+    // requests reuse the same full-page entry: they pass the full-page DPI
+    // and full-page target size, never tile-local values. No-op when no base
+    // mask is cached (mask unavailable: callers fall back to recoloring the
+    // whole page). Only ever holds m_darkReaderMaskMutex, briefly: the
+    // QImage scale itself is ~instant compared to a render.
+    void scaleDarkReaderMaskTo(int pageNum, double fullDpiX, double fullDpiY, const QSize &targetSize);
+
+    // LRU bookkeeping for m_darkReaderMaskCache. Call only with
+    // m_darkReaderMaskMutex held.
+    void touchDarkReaderMaskLru(int pageNum);
+    void evictDarkReaderMaskIfNeeded();
 
     // Secondary, independent PDFDoc used only to drive Dark Reader's
     // mask-generating renders (see darkreaderoutputdev.h for why a second
     // document is needed at all). Created lazily on first use and kept
     // around for as long as it keeps succeeding; reset whenever it fails so
     // the next attempt can retry from scratch (e.g. if the file was briefly
-    // unavailable).
+    // unavailable). Guarded by m_darkReaderMaskMutex; never touch it while
+    // holding userMutex().
     std::unique_ptr<DarkReaderRenderer> m_darkReaderRenderer;
 
     // Cached "exclude from recoloring" masks per page.
     // The mask72 is the base mask rendered at a fixed 72 DPI, which is very fast
-    // and only done once. scaledMask is dynamically scaled to dpiX/dpiY.
+    // and only done once. scaledMask is dynamically scaled to the actual primary
+    // bitmap size (see scaleDarkReaderMaskTo), so consumers need no rescale.
     struct DarkReaderMaskEntry {
         QImage mask72;
         QImage scaledMask;
@@ -203,6 +239,16 @@ private:
         double dpiY = 0;
     };
     QHash<int, DarkReaderMaskEntry> m_darkReaderMaskCache;
+    // Least-recently-used page order for m_darkReaderMaskCache (most recent
+    // last); guarded by m_darkReaderMaskMutex.
+    QList<int> m_darkReaderMaskLru;
+    // Guards m_darkReaderRenderer, m_darkReaderMaskCache and
+    // m_darkReaderMaskLru. Deliberately separate from userMutex(): secondary
+    // mask renders must not serialize against primary pdfdoc raster work.
+    // Never hold both mutexes at once (no nesting anywhere, so no lock
+    // ordering to maintain). Mutable so the const metaData() NoRecolorMask
+    // read can lock it.
+    mutable QMutex m_darkReaderMaskMutex;
     QSet<int> m_pagesWithUnsavedAnnotations;
     // Tracks whether Dark Reader recolor was active at the last reparseConfig().
     // Used to detect mid-session toggles: enabling Dark Reader primes no mask

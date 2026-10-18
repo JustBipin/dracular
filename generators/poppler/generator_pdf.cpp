@@ -891,8 +891,12 @@ bool PDFGenerator::doCloseDocument()
     rectsGenerated.clear();
 
 #if HAVE_POPPLER_CORE_OUTPUTDEV
-    m_darkReaderRenderer.reset();
-    m_darkReaderMaskCache.clear();
+    {
+        QMutexLocker locker(&m_darkReaderMaskMutex);
+        m_darkReaderRenderer.reset();
+        m_darkReaderMaskCache.clear();
+        m_darkReaderMaskLru.clear();
+    }
     m_pagesWithUnsavedAnnotations.clear();
 #endif
 
@@ -1330,6 +1334,45 @@ QImage PDFGenerator::image(Okular::PixmapRequest *request)
     qreal fakeDpiX = request->width() / pageWidth * dpi().width();
     qreal fakeDpiY = request->height() / pageHeight * dpi().height();
 
+#if HAVE_POPPLER_CORE_OUTPUTDEV
+    // Dark Reader mask priming without ever holding userMutex across the
+    // secondary raster: copy documentFilePath/documentHasPassword under
+    // userMutex, then release before DarkReaderRenderer::create()/render()
+    // (the secondary PDFDoc is independent of pdfdoc). The primary
+    // renderToImage below stays under userMutex exactly as before.
+    // We prime the 72 DPI base mask unconditionally when Dark Reader is active so that
+    // the mask cache is primed even if the current request is a tile or partial update
+    // request (which cannot directly reuse the full-page bitmap). This avoids the bug
+    // where images are incorrectly inverted on the first page paint until a zoom action occurs.
+    const bool darkReaderActive = Okular::SettingsCore::changeColors() && Okular::SettingsCore::renderMode() == Okular::SettingsCore::EnumRenderMode::DarkReader;
+    const int maskPageNum = page->number();
+    // Full-page DPI key for the single per-page mask slot. fakeDpiX/Y are
+    // already full-page DPIs: request->width()/height() describe the full
+    // page even for tiles (the tile rect is geometry() of those full-page
+    // dims, and the primary render below scales the tile from them), so tile
+    // requests reuse the exact same cache key as full-page requests. This is
+    // the exact form of tileWidth / normalizedWidth; recomputing it back from
+    // the tile rect is deliberately avoided because
+    // NormalizedRect::geometry() truncates (+1 inclusive convention), which
+    // would skew the key by a pixel or two and needlessly split the slot.
+    const double maskDpiX = fakeDpiX;
+    const double maskDpiY = fakeDpiY;
+    if (darkReaderActive) {
+        QString maskFilePath;
+        bool maskHasPassword = false;
+        bool maskAborted = false;
+        {
+            QMutexLocker locker(userMutex());
+            maskAborted = request->shouldAbortRender();
+            maskFilePath = documentFilePath;
+            maskHasPassword = documentHasPassword;
+        }
+        if (!maskAborted) {
+            ensureDarkReaderBaseMask(maskPageNum, maskFilePath, maskHasPassword);
+        }
+    }
+#endif
+
     // generate links rects only the first time
     bool genObjectRects = !rectsGenerated.at(page->number());
 
@@ -1348,20 +1391,6 @@ QImage PDFGenerator::image(Okular::PixmapRequest *request)
     // 2. Take data from outputdev and attach it to the Page
     QImage img;
     if (p) {
-#if HAVE_POPPLER_CORE_OUTPUTDEV
-        // Dark Reader wants an exact "this pixel belongs to an embedded
-        // image" mask, so it can recolor everything else without touching
-        // photos. Producing that mask requires driving the render through
-        // Poppler's core API directly (see darkreaderoutputdev.h).
-        //
-        // We call ensureDarkReaderMask unconditionally when Dark Reader is active so that
-        // the mask cache is primed even if the current request is a tile or partial update
-        // request (which cannot directly reuse the full-page bitmap). This avoids the bug
-        // where images are incorrectly inverted on the first page paint until a zoom action occurs.
-        if (Okular::SettingsCore::changeColors() && Okular::SettingsCore::renderMode() == Okular::SettingsCore::EnumRenderMode::DarkReader) {
-            ensureDarkReaderMask(page, fakeDpiX, fakeDpiY);
-        }
-#endif
         if (request->isTile()) {
             const QRect rect = request->normalizedRect().geometry(request->width(), request->height());
             if (request->partialUpdatesWanted()) {
@@ -1399,49 +1428,104 @@ QImage PDFGenerator::image(Okular::PixmapRequest *request)
     // 3. UNLOCK [re-enables shared access]
     userMutex()->unlock();
 
+#if HAVE_POPPLER_CORE_OUTPUTDEV
+    // Size the cached mask to the ACTUAL primary bitmap size (not a qRound
+    // dpi-ratio estimate) so the painter's mask.size() == fullPageDeviceSize
+    // fast path hits and no rescale is needed. For tiles, img is tile-sized,
+    // so the target is the full-page request size (== tileWidth /
+    // normalizedWidth in exact arithmetic; recomputing it back from the tile
+    // bitmap is avoided because NormalizedRect::geometry() truncates, which
+    // would leave the mask a pixel or two off the assembled full-page pixmap
+    // the painter compares against).
+    // Both renders use rotation 0 (Okular applies view rotation itself as a
+    // uniform later step for all generators), so the unrotated mask lines up
+    // with the unrotated bitmap. Mask pixel semantics unchanged: white =
+    // recolor, black = keep image.
+    if (darkReaderActive && !img.isNull()) {
+        const QSize maskTargetSize = request->isTile() ? QSize(request->width(), request->height()) : img.size();
+        scaleDarkReaderMaskTo(maskPageNum, maskDpiX, maskDpiY, maskTargetSize);
+    }
+#endif
+
     return img;
 }
 
 #if HAVE_POPPLER_CORE_OUTPUTDEV
-void PDFGenerator::ensureDarkReaderMask(const Okular::Page *page, double dpiX, double dpiY)
+void PDFGenerator::ensureDarkReaderBaseMask(int pageNum, const QString &filePath, bool hasPassword)
 {
-    const int pageNum = page->number();
-    auto it = m_darkReaderMaskCache.find(pageNum);
-
-    if (it == m_darkReaderMaskCache.end()) {
-        if (documentHasPassword || documentFilePath.isEmpty()) {
-            return;
-        }
-
-        if (!m_darkReaderRenderer) {
-            m_darkReaderRenderer = DarkReaderRenderer::create(documentFilePath);
-        }
-        if (!m_darkReaderRenderer) {
-            return;
-        }
-
-        QImage img;
-        QImage mask72;
-        // Generate base mask at a fixed 72 DPI (native PDF point resolution) - fast and lightweight (~5ms)
-        if (!m_darkReaderRenderer->render(pageNum, 72.0, 72.0, &img, &mask72)) {
-            m_darkReaderRenderer.reset();
-            m_darkReaderMaskCache.remove(pageNum);
-            return;
-        }
-
-        DarkReaderMaskEntry entry;
-        entry.mask72 = mask72;
-        entry.dpiX = 0;
-        entry.dpiY = 0;
-        it = m_darkReaderMaskCache.insert(pageNum, entry);
+    if (hasPassword || filePath.isEmpty()) {
+        return;
     }
 
-    // Scale cached base mask on-the-fly to requested DPI (practically instant compared to rendering)
-    if (it.value().dpiX != dpiX || it.value().dpiY != dpiY) {
-        QSize targetSize(qRound(it.value().mask72.width() * dpiX / 72.0), qRound(it.value().mask72.height() * dpiY / 72.0));
+    // Only the mask mutex is held across the secondary open + render below,
+    // never userMutex(): the secondary PDFDoc is independent of pdfdoc, so
+    // this displayPageSlice + bitmap copy must not serialize against primary
+    // raster work. The mutex still serializes concurrent secondary renders
+    // against each other because Poppler's core PDFDoc is not documented as
+    // thread-safe.
+    QMutexLocker locker(&m_darkReaderMaskMutex);
+    if (m_darkReaderMaskCache.contains(pageNum)) {
+        touchDarkReaderMaskLru(pageNum);
+        return;
+    }
+
+    if (!m_darkReaderRenderer) {
+        m_darkReaderRenderer = DarkReaderRenderer::create(filePath);
+    }
+    if (!m_darkReaderRenderer) {
+        return;
+    }
+
+    QImage img;
+    QImage mask72;
+    // Generate base mask at a fixed 72 DPI (native PDF point resolution) - fast and lightweight (~5ms)
+    if (!m_darkReaderRenderer->render(pageNum, 72.0, 72.0, &img, &mask72)) {
+        m_darkReaderRenderer.reset();
+        return;
+    }
+
+    DarkReaderMaskEntry entry;
+    entry.mask72 = mask72;
+    entry.dpiX = 0;
+    entry.dpiY = 0;
+    evictDarkReaderMaskIfNeeded();
+    m_darkReaderMaskCache.insert(pageNum, entry);
+    m_darkReaderMaskLru.append(pageNum);
+}
+
+void PDFGenerator::scaleDarkReaderMaskTo(int pageNum, double fullDpiX, double fullDpiY, const QSize &targetSize)
+{
+    if (targetSize.isEmpty()) {
+        return;
+    }
+
+    QMutexLocker locker(&m_darkReaderMaskMutex);
+    auto it = m_darkReaderMaskCache.find(pageNum);
+    if (it == m_darkReaderMaskCache.end() || it.value().mask72.isNull()) {
+        return;
+    }
+
+    // Scale cached base mask on-the-fly to the actual bitmap size (practically instant compared to rendering).
+    // Keyed by full-page DPI in a single slot per page, so tiles reuse the same entry.
+    if (it.value().dpiX != fullDpiX || it.value().dpiY != fullDpiY || it.value().scaledMask.size() != targetSize) {
         it.value().scaledMask = it.value().mask72.scaled(targetSize);
-        it.value().dpiX = dpiX;
-        it.value().dpiY = dpiY;
+        it.value().dpiX = fullDpiX;
+        it.value().dpiY = fullDpiY;
+    }
+    touchDarkReaderMaskLru(pageNum);
+}
+
+void PDFGenerator::touchDarkReaderMaskLru(int pageNum)
+{
+    m_darkReaderMaskLru.removeOne(pageNum);
+    m_darkReaderMaskLru.append(pageNum);
+}
+
+void PDFGenerator::evictDarkReaderMaskIfNeeded()
+{
+    while (m_darkReaderMaskCache.size() >= DarkReaderMaskCacheCapacity && !m_darkReaderMaskLru.isEmpty()) {
+        const int oldest = m_darkReaderMaskLru.takeFirst();
+        m_darkReaderMaskCache.remove(oldest);
     }
 }
 #endif
@@ -1831,6 +1915,10 @@ QVariant PDFGenerator::metaData(const QString &key, const QVariant &option) cons
         // available for that page (Dark Reader inactive, non-PDF-core-backed
         // build, or the page has simply not been rendered with a mask yet),
         // in which case callers must fall back to recoloring the whole page.
+        // The cache is written from raster threads (see image()), so read it
+        // under the mask mutex. QImage is implicitly shared, so the returned
+        // copy is cheap and stays valid after unlock.
+        QMutexLocker locker(&m_darkReaderMaskMutex);
         const auto it = m_darkReaderMaskCache.constFind(option.toInt());
         if (it != m_darkReaderMaskCache.constEnd()) {
             return QVariant::fromValue(it.value().scaledMask);

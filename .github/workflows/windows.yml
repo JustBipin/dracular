@@ -1,0 +1,119 @@
+# Windows build (CraftMaster + Craft).
+#
+# Builds Dracular on windows-latest and uploads the installer.
+# Triggered by dracular-v* tags and manual dispatch.
+#
+# Shape follows projects shipping Craft-built Windows installers in CI:
+# CraftMaster provisions the toolchain (no preinstalled VS or dev-cmd
+# action needed), Craft installs prebuilt dependencies, then compiles
+# OUR tree via --src-dir (no Craft blueprint fork to maintain) and
+# packages it. Steps fail loudly on layout changes.
+#
+# Known limitation: the exact Dark Reader image mask needs Poppler's
+# core headers (SplashOutputDev.h, i.e. ENABLE_UNSTABLE_API_ABI_HEADERS).
+# If the Craft Poppler build does not enable them, the build still
+# succeeds: HAVE_POPPLER_CORE_OUTPUTDEV becomes 0 and Dark Reader falls
+# back to recoloring the whole page (images included). Enabling the
+# headers in the Craft Poppler blueprint is a follow-up; see the Flatpak
+# manifest (org.kde.dracular.json poppler config-opts), which already
+# does this for Linux.
+
+name: Windows (Craft)
+
+on:
+  push:
+    tags:
+      - 'dracular-v*'
+  workflow_dispatch:
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build:
+    # Pinned to windows-2022 (not -latest): the -latest image was seen
+    # without any Visual Studio (CraftMaster aborts with "Unable to
+    # locate Visual Studio"), while windows-2022 ships full VS2022.
+    runs-on: windows-2022
+    env:
+      WORKSPACE: ${{ github.workspace }}
+    steps:
+      - name: Check out Dracular
+        uses: actions/checkout@v4
+
+      - name: Clone CraftMaster
+        run: git clone --depth=1 https://invent.kde.org/packaging/craftmaster.git /C/CraftMaster/CraftMaster
+
+      - name: Backfill patch/sed missing from Git for Windows
+        # Craft shims dev-utils/patch (and sed) to Git's msys tools, but
+        # current ucrt64 Git for Windows builds omit them, which fails
+        # the CraftMaster bootstrap ("Failed to locate ... patch.exe").
+        # Copy them from elsewhere in the Git install, else from MSYS2.
+        shell: powershell
+        run: |
+          $dest = "C:\Program Files\Git\ucrt64\usr\bin"
+          foreach ($t in @("patch.exe", "sed.exe")) {
+            if (Test-Path "$dest\$t") { Write-Output "$t already present"; continue }
+            $found = Get-ChildItem "C:\Program Files\Git" -Recurse -Filter $t -ErrorAction SilentlyContinue |
+              Select-Object -First 1 -ExpandProperty FullName
+            if (-not $found) {
+              choco install -y msys2 --no-progress
+              $found = "C:\tools\msys64\usr\bin\$t"
+            }
+            if (-not (Test-Path $found)) {
+              Write-Error "no $t found (checked Git tree and MSYS2)"
+              exit 1
+            }
+            # This runner's Git lacks the usr\bin tree entirely; create it.
+            New-Item -ItemType Directory -Force $dest | Out-Null
+            Copy-Item $found $dest
+            Write-Output "backfilled $t from $found"
+          }
+
+      - name: Configure CraftMaster
+        run: python /C/CraftMaster/CraftMaster/CraftMaster.py --config $WORKSPACE/.craftsettings.ini --variables "WORKSPACE=$WORKSPACE"
+
+      - name: Locate Craft
+        # CraftMaster creates one ABI root (windows-msvc2022_64-cl per
+        # .craftsettings.ini). Resolve it instead of hardcoding, and
+        # fail loudly if the layout is not as expected.
+        run: |
+          matches=( /C/CraftMaster/windows-*/craft/bin/craft.py )
+          if [ ${#matches[@]} -ne 1 ]; then
+            echo "Expected exactly one Craft root, found: ${matches[*]:-<none>}"
+            ls /C/CraftMaster
+            exit 1
+          fi
+          echo "CRAFT=${matches[0]}" >> $GITHUB_ENV
+          echo "Using Craft at ${matches[0]}"
+
+      - name: Install NSIS
+        run: python "$CRAFT" dev-utils/nsis
+
+      - name: Install Okular dependencies via Craft
+        # TODO(verify): blueprint name. Craft blueprints mirror invent
+        # paths; okular is expected at kde/applications/okular.
+        # Libraries come prebuilt, so this is mostly downloads.
+        run: python "$CRAFT" --install-deps kde/applications/okular
+
+      - name: Build Dracular sources via Craft
+        # --src-dir points Craft at our tree (same layout as upstream
+        # Okular with Dracular commits on top); --no-cache forces a
+        # source build of it instead of a prebuilt Okular.
+        run: python "$CRAFT" --no-cache --src-dir "$WORKSPACE" kde/applications/okular
+
+      - name: Package Dracular
+        run: python "$CRAFT" --no-cache --src-dir "$WORKSPACE" --package kde/applications/okular
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dracular-windows-installer
+          path: ${{ github.workspace }}/packages/*
+
+      - name: Attach to GitHub Release (tags only)
+        if: startsWith(github.ref, 'refs/tags/dracular-v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ github.workspace }}/packages/*

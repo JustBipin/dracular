@@ -1,0 +1,58 @@
+# Flatpak release build (Linux)
+#
+# Builds org.kde.dracular with flatpak-builder, cuts a single-file
+# dracular.flatpak bundle, and uploads it. Triggered by dracular-v*
+# tags and manual dispatch. The bundle is the Linux release artifact;
+# attach it to the GitHub Release next to the Windows installer.
+
+name: Flatpak
+
+on:
+  push:
+    tags:
+      - 'dracular-v*'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out Dracular
+        uses: actions/checkout@v4
+
+      - name: Free disk space
+        # Full KDE-stack Flatpak builds need room for the SDK,
+        # the build tree, and the exported repo.
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc 2>/dev/null || true
+          df -h /
+
+      - name: Install Flatpak tooling
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y flatpak flatpak-builder
+          flatpak remote-add --user --if-not-exists flathub \
+            https://dl.flathub.org/repo/flathub.flatpakrepo
+          flatpak install --user -y flathub \
+            org.kde.Platform//6.11 org.kde.Sdk//6.11
+
+      - name: Build and bundle
+        # NOTE: if the sandbox FUSE mount fails on the runner image,
+        # add --disable-rofiles-fuse to the flatpak-builder invocation.
+        run: |
+          flatpak-builder --repo=repo \
+            --state-dir=flatpak-state build-dir org.kde.dracular.json
+          flatpak build-bundle repo dracular.flatpak org.kde.dracular stable
+          ls -la dracular.flatpak
+
+      - name: Upload bundle artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dracular-flatpak-bundle
+          path: dracular.flatpak
+
+      - name: Attach to GitHub Release (tags only)
+        if: startsWith(github.ref, 'refs/tags/dracular-v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dracular.flatpak
